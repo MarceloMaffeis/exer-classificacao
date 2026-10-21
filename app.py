@@ -17,15 +17,22 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- GERAÇÃO E TREINAMENTO DO MODELO (COM CACHE) ---
+# Mapeamento numérico para rótulos legíveis
+CLASS_NAMES = {
+    0: "Refugo",
+    1: "Retrabalho",
+    2: "Aprovada"
+}
+
+# --- GERAÇÃO DE DADOS E TREINAMENTO DO MODELO (COM CACHE) ---
 @st.cache_resource
-def treinar_modelo():
-    # Classes: 0: Refugo, 1: Retrabalho, 2: Aprovada
-    # Centros definidos para [Peso_gramas, Espessura_mm]
+def carregar_dados_e_treinar_modelo():
+    # Centros nominais definidos para [Peso_gramas, Espessura_mm]
+    # 0: Refugo, 1: Retrabalho, 2: Aprovada
     centers = [
-        [120.0, 8.5],   # 0: Refugo (muito leve / fino)
-        [145.0, 10.2],  # 1: Retrabalho (intermediário / ajustes)
-        [150.0, 12.0]   # 2: Aprovada (especificação ideal)
+        [120.0, 8.5],   # Refugo (muito leve / fino)
+        [145.0, 10.2],  # Retrabalho (intermediário / ajustes)
+        [150.0, 12.0]   # Aprovada (especificação ideal)
     ]
     
     X, y = make_blobs(
@@ -35,6 +42,13 @@ def treinar_modelo():
         random_state=42
     )
 
+    # Criação do DataFrame completo para visualização
+    df = pd.DataFrame(X, columns=["Peso_gramas", "Espessura_mm"])
+    df["Status"] = [CLASS_NAMES[label] for label in y]
+    df["Peso_gramas"] = df["Peso_gramas"].round(2)
+    df["Espessura_mm"] = df["Espessura_mm"].round(2)
+
+    # Divisão em treino e teste
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.25, random_state=42, stratify=y
     )
@@ -47,20 +61,13 @@ def treinar_modelo():
     model = SVC(kernel="rbf", C=1.0, probability=True, random_state=42)
     model.fit(X_train_scaled, y_train)
 
-    # Avaliação no conjunto de teste para a matriz de confusão
+    # Matriz de confusão no conjunto de validação
     y_pred = model.predict(X_test_scaled)
     cm = confusion_matrix(y_test, y_pred)
 
-    return model, scaler, cm
+    return model, scaler, cm, df
 
-model, scaler, cm = treinar_modelo()
-
-# Mapeamento das classes
-class_names = {
-    0: "Refugo",
-    1: "Retrabalho",
-    2: "Aprovada"
-}
+model, scaler, cm, df_pecas = carregar_dados_e_treinar_modelo()
 
 # --- INTERFACE STREAMLIT ---
 st.title("⚙️ Sistema de Controle de Qualidade de Peças")
@@ -68,6 +75,7 @@ st.markdown("Inspeção dimensional e de massa para classificação automática 
 
 st.divider()
 
+# Layout em duas colunas: Entrada do Inspetor e Matriz de Confusão
 col_input, col_metrics = st.columns([1, 1], gap="large")
 
 # --- COLUNA 1: ENTRADA DO INSPETOR ---
@@ -95,12 +103,10 @@ with col_input:
     btn_avaliar = st.button("🔍 Avaliar Peça", type="primary", use_container_width=True)
 
     if btn_avaliar:
-        # Prepara os dados de entrada
         entrada = np.array([[peso, espessura]])
         entrada_scaled = scaler.transform(entrada)
-        
         predicao = model.predict(entrada_scaled)[0]
-        resultado = class_names[predicao]
+        resultado = CLASS_NAMES[predicao]
 
         st.markdown("### Resultado da Inspeção:")
         if resultado == "Aprovada":
@@ -117,7 +123,7 @@ with col_metrics:
 
     labels = ["Refugo", "Retrabalho", "Aprovada"]
     
-    fig, ax = plt.subplots(figsize=(5, 4))
+    fig, ax = plt.subplots(figsize=(5, 3.8))
     sns.heatmap(
         cm,
         annot=True,
@@ -133,3 +139,29 @@ with col_metrics:
     plt.tight_layout()
 
     st.pyplot(fig)
+
+# --- SEÇÃO INFERIOR: VISUALIZAÇÃO DO DATAFRAME ---
+st.divider()
+st.subheader("📁 Base de Dados Sintética de Inspeção")
+st.caption("Amostras geradas com features de processo (`Peso_gramas`, `Espessura_mm`) e o respectivo status de qualidade.")
+
+# Filtro interativo para explorar o DataFrame
+col_filtro, col_total = st.columns([1, 2])
+with col_filtro:
+    filtro_status = st.multiselect(
+        "Filtrar por Status:",
+        options=list(CLASS_NAMES.values()),
+        default=list(CLASS_NAMES.values())
+    )
+
+df_filtrado = df_pecas[df_pecas["Status"].isin(filtro_status)]
+
+with col_total:
+    st.metric("Total de Peças Exibidas", len(df_filtrado))
+
+# Renderização do DataFrame interativo
+st.dataframe(
+    df_filtrado,
+    use_container_width=True,
+    hide_index=True
+)
